@@ -1,0 +1,499 @@
+// Veloura clinic — database schema
+// PostgreSQL (Neon). Translatable text is stored as JSON: { he, ar, ru, en }.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  EDITOR
+  CUSTOMER
+}
+
+enum ClinicCity {
+  HAIFA
+  UMM_AL_FAHEM
+}
+
+enum ServiceCategory {
+  AESTHETIC // Botox, filler, threads
+  IV_DRIP // IV vitamin infusions
+  MASSAGE
+  COSMETIC // facials, skin care
+  CHINESE // traditional Chinese treatments
+  LASER // laser hair removal
+}
+
+enum BookingStatus {
+  REQUESTED
+  APPROVED
+  COMPLETED
+  DECLINED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+}
+
+enum OrderStatus {
+  NEW
+  DONE
+  CANCELLED
+  REFUNDED
+}
+
+enum ProductCategoryKind {
+  FACE
+  HAIR
+  BODY
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum PromoKind {
+  PERCENT
+  FIXED
+}
+
+enum PromoScope {
+  ALL
+  PRODUCTS
+  TREATMENTS
+}
+
+enum RewardTxnType {
+  EARN
+  REDEEM
+  EXPIRE
+  ADJUST
+}
+
+// ----------------------------------------------------------------------
+// Users & auth
+// ----------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified DateTime?
+  passwordHash  String
+  name          String
+  phone         String?
+  role          Role     @default(CUSTOMER)
+
+  // First-signup 20% discount (treatments only) — one-time use.
+  firstSignupDiscountUsed Boolean @default(false)
+
+  practitioner  Practitioner?
+  bookings      Booking[]
+  orders        Order[]
+  rewardAccount RewardAccount?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+// ----------------------------------------------------------------------
+// Clinics & practitioners
+// ----------------------------------------------------------------------
+
+model Clinic {
+  id      String     @id @default(cuid())
+  slug    String     @unique
+  city    ClinicCity
+  name    Json // { he, ar, ru, en }
+  address Json
+  phone   String?
+  mapUrl  String?
+  hours   Json? // { mon: "09:00-18:00", ... }
+  photos  String[]   @default([])
+
+  practitioners PractitionerClinic[]
+  workingHours  WorkingHours[]
+  timeOff       TimeOff[]
+  bookings      Booking[]
+  pickupOrders  Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Practitioner {
+  id     String  @id @default(cuid())
+  slug   String  @unique
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  name   String // display name, e.g. "Dr. Jubran Jbarin"
+  title  Json? // role/title per locale
+  bio    Json? // { he, ar, ru, en }
+  photos String[] @default([])
+
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  clinics      PractitionerClinic[]
+  services     Service[]
+  workingHours WorkingHours[]
+  timeOff      TimeOff[]
+  bookings     Booking[]
+  galleryItems WorkGalleryItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Which practitioner works at which clinic (enforces location booking rules).
+model PractitionerClinic {
+  id             String       @id @default(cuid())
+  practitionerId String
+  clinicId       String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([practitionerId, clinicId])
+}
+
+// ----------------------------------------------------------------------
+// Services / treatments
+// ----------------------------------------------------------------------
+
+model Service {
+  id             String          @id @default(cuid())
+  slug           String          @unique
+  practitionerId String
+  practitioner   Practitioner    @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  category       ServiceCategory
+  name           Json
+  description    Json?
+  durationMin    Int             @default(30)
+  price          Decimal         @db.Decimal(10, 2)
+  image          String?
+  sortOrder      Int             @default(0)
+  isActive       Boolean         @default(true)
+
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Recurring weekly availability for a practitioner at a clinic.
+model WorkingHours {
+  id             String       @id @default(cuid())
+  practitionerId String
+  clinicId       String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  dayOfWeek Int // 0 = Sunday ... 6 = Saturday
+  startTime String // "09:00"
+  endTime   String // "17:00"
+
+  @@unique([practitionerId, clinicId, dayOfWeek])
+}
+
+// One-off blocks where a practitioner is unavailable (vacation, etc.).
+model TimeOff {
+  id             String       @id @default(cuid())
+  practitionerId String
+  clinicId       String?
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  clinic         Clinic?      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  startsAt DateTime
+  endsAt   DateTime
+  reason   String?
+
+  createdAt DateTime @default(now())
+}
+
+// ----------------------------------------------------------------------
+// Bookings
+// ----------------------------------------------------------------------
+
+model Booking {
+  id             String        @id @default(cuid())
+  customerId     String
+  customer       User          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  serviceId      String
+  service        Service       @relation(fields: [serviceId], references: [id])
+  practitionerId String
+  practitioner   Practitioner  @relation(fields: [practitionerId], references: [id])
+  clinicId       String
+  clinic         Clinic        @relation(fields: [clinicId], references: [id])
+
+  startsAt DateTime
+  endsAt   DateTime
+  status   BookingStatus  @default(REQUESTED)
+
+  priceAtBooking Decimal       @db.Decimal(10, 2)
+  paymentMethod  PaymentMethod?
+  firstSignupDiscountApplied Boolean @default(false)
+  notes          String?
+
+  rewardTxns RewardTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([practitionerId, startsAt])
+  @@index([customerId])
+}
+
+// ----------------------------------------------------------------------
+// Shop — products & orders
+// ----------------------------------------------------------------------
+
+model ProductCategory {
+  id   String              @id @default(cuid())
+  kind ProductCategoryKind @unique
+  slug String              @unique
+  name Json
+
+  products Product[]
+}
+
+model Product {
+  id          String          @id @default(cuid())
+  slug        String          @unique
+  categoryId  String
+  category    ProductCategory @relation(fields: [categoryId], references: [id])
+  name        Json
+  description Json?
+  images      String[]        @default([])
+
+  regularPrice    Decimal @db.Decimal(10, 2)
+  discountedPrice Decimal @db.Decimal(10, 2)
+  stock           Int     @default(0) // used for products that have no variants
+
+  isFeatured Boolean @default(false)
+  isActive   Boolean @default(true)
+
+  createdById String?
+
+  variants   ProductVariant[]
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  label         Json // e.g. { he: "50 מ\"ל", en: "50ml" }
+  sku           String? @unique
+  stock         Int     @default(0)
+  priceOverride Decimal? @db.Decimal(10, 2)
+  sortOrder     Int     @default(0)
+
+  orderItems OrderItem[]
+}
+
+model Order {
+  id         String  @id @default(cuid())
+  customerId String?
+  customer   User?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  // Guest checkout details (when customerId is null).
+  guestName  String?
+  guestEmail String?
+  guestPhone String?
+
+  pickupClinicId String
+  pickupClinic   Clinic @relation(fields: [pickupClinicId], references: [id])
+
+  status        OrderStatus   @default(NEW)
+  paymentMethod PaymentMethod @default(CASH)
+
+  subtotal       Decimal @db.Decimal(10, 2)
+  discountTotal  Decimal @default(0) @db.Decimal(10, 2)
+  pointsRedeemed Int     @default(0)
+  total          Decimal @db.Decimal(10, 2)
+
+  promoCodeId String?
+  promoCode   PromoCode? @relation(fields: [promoCodeId], references: [id])
+
+  items      OrderItem[]
+  rewardTxns RewardTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  nameSnapshot Json
+  quantity     Int
+  unitPrice    Decimal @db.Decimal(10, 2)
+  lineTotal    Decimal @db.Decimal(10, 2)
+}
+
+// ----------------------------------------------------------------------
+// Homepage content
+// ----------------------------------------------------------------------
+
+model HeroSlide {
+  id        String  @id @default(cuid())
+  image     String
+  headline  Json?
+  subtext   Json?
+  ctaLabel  Json?
+  ctaHref   String?
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Story {
+  id           String    @id @default(cuid())
+  mediaUrl     String
+  mediaType    MediaType @default(IMAGE)
+  thumbnailUrl String?
+  caption      Json?
+  sortOrder    Int       @default(0)
+  isActive     Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WorkGalleryItem {
+  id             String        @id @default(cuid())
+  title          Json?
+  // Either a before/after pair, or a single combined image.
+  beforeImage    String?
+  afterImage     String?
+  singleImage    String?
+  treatmentLabel Json?
+  practitionerId String?
+  practitioner   Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
+  sortOrder      Int           @default(0)
+  isActive       Boolean       @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ----------------------------------------------------------------------
+// Promotions & rewards
+// ----------------------------------------------------------------------
+
+model PromoCode {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  kind      PromoKind
+  value     Decimal    @db.Decimal(10, 2)
+  scope     PromoScope @default(ALL)
+  expiresAt DateTime?
+  maxUses   Int?
+  usedCount Int        @default(0)
+  isActive  Boolean    @default(true)
+
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RewardAccount {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pointsBalance  Int      @default(0)
+  lastActivityAt DateTime @default(now())
+
+  transactions RewardTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RewardTransaction {
+  id        String        @id @default(cuid())
+  accountId String
+  account   RewardAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type      RewardTxnType
+  points    Int // positive = earned, negative = redeemed/expired
+  description String?
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+}
+
+// Singleton — loyalty rule configuration (admin-editable).
+model RewardConfig {
+  id                 Int     @id @default(1)
+  earnRatePercent    Decimal @default(5) @db.Decimal(5, 2) // points earned = 5% of spend
+  redeemPointsPerUnit Int    @default(100) // 100 points ...
+  redeemUnitValue    Decimal @default(10) @db.Decimal(10, 2) // ... = ₪10 off
+  pointsExpiryMonths Int     @default(12)
+  updatedAt          DateTime @updatedAt
+}
+
+// Singleton — global site settings (admin-editable).
+model SiteSettings {
+  id             Int     @id @default(1)
+  phone          String  @default("050-277-7515")
+  whatsappNumber String  @default("972502777515")
+  instagramUrl   String? @default("https://instagram.com/DrJubranClinic")
+  facebookUrl    String?
+  email          String?
+  updatedAt      DateTime @updatedAt
+}
