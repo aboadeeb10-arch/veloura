@@ -16,9 +16,9 @@ export default async function AdminLayout({
   setRequestLocale(locale);
 
   const session = await auth();
-  if (!session?.user) redirect({ href: "/sign-in" });
+  if (!session?.user) redirect({ href: "/sign-in", locale });
   if (session.user.role !== "ADMIN" && session.user.role !== "EDITOR") {
-    redirect({ href: "/account" });
+    redirect({ href: "/account", locale });
   }
 
   return (

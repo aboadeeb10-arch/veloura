@@ -22,7 +22,7 @@ export default async function MyBookingsPage({
   setRequestLocale(locale);
 
   const session = await auth();
-  if (!session?.user) redirect({ href: "/sign-in" });
+  if (!session?.user) redirect({ href: "/sign-in", locale });
 
   const t = await getTranslations("Account");
   const tb = await getTranslations("BookingStatus");

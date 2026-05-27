@@ -22,9 +22,9 @@ export default async function AccountPage({
   setRequestLocale(locale);
 
   const session = await auth();
-  if (!session?.user) redirect({ href: "/sign-in" });
+  if (!session?.user) redirect({ href: "/sign-in", locale });
   if (session.user.role === "ADMIN" || session.user.role === "EDITOR") {
-    redirect({ href: "/admin" });
+    redirect({ href: "/admin", locale });
   }
 
   const t = await getTranslations("Account");
@@ -45,7 +45,7 @@ export default async function AccountPage({
       },
     },
   });
-  if (!user) redirect({ href: "/sign-in" });
+  if (!user) redirect({ href: "/sign-in", locale });
 
   const points = user.rewardAccount?.pointsBalance ?? 0;
   const worth = Math.floor(points / 100) * 10;
