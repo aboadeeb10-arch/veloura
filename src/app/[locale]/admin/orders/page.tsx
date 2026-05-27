@@ -31,7 +31,7 @@ export default async function AdminOrdersPage({
 
   // Orders are admin-only.
   const session = await auth();
-  if (session?.user?.role !== "ADMIN") redirect("/admin");
+  if (session?.user?.role !== "ADMIN") redirect({ href: "/admin" });
 
   const orders = await prisma.order.findMany({
     orderBy: { createdAt: "desc" },
