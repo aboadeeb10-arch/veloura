@@ -21,7 +21,7 @@ export function StoriesRow({ stories }: { stories: StoryData[] }) {
 
   return (
     <>
-      <div className="no-scrollbar -mx-1 flex gap-4 overflow-x-auto px-1 py-1">
+      <div className="no-scrollbar -mx-1 flex gap-4 overflow-x-auto px-1 py-1 sm:justify-center sm:gap-6">
         {stories.map((s, i) => (
           <button
             key={s.id}
